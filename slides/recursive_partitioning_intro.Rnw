@@ -1,0 +1,947 @@
+\documentclass{beamer}
+
+\usetheme{CVille}
+\usecolortheme{cavs}
+
+\usepackage{multicol}
+\usepackage{ulem}
+
+\title{Efficiently Exploring Multilevel Data with Recursive Partitioning}
+
+\author[Daniel P. Martin]{
+Daniel P. Martin\\
+University of Virginia\\
+}
+
+\institute[\textbf{\insertframenumber \hspace{0.1 cm}of \inserttotalframenumber}] 
+
+\date{May 26, 2015}
+
+\pgfdeclareimage[height = 0.5 cm]{university-logo}{UVA}
+\logo{\pgfuseimage{university-logo}}
+
+\begin{document}
+
+% rm(list = ls())
+% setwd("~/Documents/college stuffs/grad school/Research/Dissertation/Proposal/Presentation/")
+% set.seed(42)
+
+<<opt, include = FALSE>>=
+
+opts_knit$set(root.dir = "~/Documents/college stuffs/grad school/Research/Dissertation/Dissemination/workshop/slides/",
+              tidy = TRUE,
+              cache.extra = list(rand_seed, R.version, sessionInfo(), format(Sys.Date(), '%Y-%m')))
+
+library(ISLR)
+library(ggplot2)
+library(grid)
+library(rpart)
+library(randomForest)
+library(partykit)
+library(dplyr)
+library(gridExtra)
+library(car)
+library(MASS)
+library(mleda)
+
+set.seed(42)
+
+@ 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+
+\titlepage
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Outline}
+
+\begin{itemize}
+\item Exploratory data analysis discussion
+\item Intro to recursive partitioning
+\item Multilevel extensions
+\item Multilevel issues (and ``best practices'')
+\end{itemize}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{EDA Discussion}
+\begin{frame}
+
+\begin{quote}
+    The term ``exploratory'' is considered by many as less than an approach to data analysis and more a confession of guilt.
+\end{quote}
+
+\hspace{6ex} -Jack McArdle, 2014
+
+\pause
+
+\vspace{5ex}
+
+Why is exploratory research seen in this way? How do you use exploratory research (if at all)?
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{What Typically Comes After Confirmatory Tests?}
+
+\begin{center}
+Data-driven exploration with NHST
+\end{center}
+
+\vspace{-15px}
+
+\begin{center}
+\includegraphics[height = 2in]{figure/exploration.jpg}
+\end{center}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{If Not NHST, What Else Is There?}
+\framesubtitle{Breiman (2001)}
+
+\begin{center}
+Data modeling:
+\end{center}
+
+\begin{center}
+\includegraphics[width = 2in]{figure/data_model.png}
+\end{center}
+
+\begin{center}
+vs.
+\end{center}
+
+\begin{center}
+Algorithmic modeling:
+\end{center}
+
+\begin{center}
+\includegraphics[width = 2in]{figure/algo_model.png}
+\end{center}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Recursive Partitioning}
+\begin{frame}
+\frametitle{An Introduction to Decision Trees}
+
+<<grad_rate, echo = FALSE, fig.width = 12, fig.height = 6>>=
+
+data(College)
+
+College$Grad_Cut <- cut(College$Grad.Rate, breaks = 4, labels = c("Poor", "Moderate", "Good", "Great"))
+palette <- c("#ca0020", "#f4a582", "#92c5de", "#0571b0")
+
+part_plot <- ggplot(aes(x = Outstate, y = Top10perc), data = College) + 
+  geom_point(aes(color = Grad_Cut), size = 4) +
+  scale_colour_manual(values = palette) + 
+  labs(x = "\nOut of State Tuition", y = " Percent of Students in\nTop 10% of High School\n") +
+  theme_bw() + guides(color = guide_legend(title = "Graduation Rate: ")) + 
+  theme(axis.title = element_text(size = 24),
+        axis.text = element_text(size = 20),
+        legend.title = element_text(size = 22),
+        legend.text = element_text(size = 20),
+        legend.position = "top",
+        legend.key.height = unit(1, "line"),
+        legend.key.width = unit(2,"line"))
+
+part_plot
+
+@
+
+\pause
+
+\centering
+$RSS_{total} \stackrel{?}{<} RSS_{part1} + RSS_{part2}$
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{An Introduction to Decision Trees}
+
+<<grad_rate_try_split, echo = FALSE, fig.width = 12, fig.height = 6>>=
+
+part_plot + geom_vline(x = 5500, size = 2)
+
+# Create RSS calculations
+
+total_RSS <- sum((College$Grad.Rate - mean(College$Grad.Rate))^2)
+
+part_1 <- filter(College, Outstate < 5500) %>%
+  summarise(sum((Grad.Rate - mean(Grad.Rate))^2)/1000)
+
+part_2 <- filter(College, Outstate >= 5500) %>%
+  summarise(sum((Grad.Rate - mean(Grad.Rate))^2)/1000)
+
+@
+
+\vspace{2ex}
+
+\centering
+$\Sexpr{round(total_RSS/1000)} \stackrel{?}{<} \Sexpr{round(part_1)} + \Sexpr{round(part_2)} = \Sexpr{round(part_1 + part_2)}$
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{An Introduction to Decision Trees}
+
+<<grad_rate_best_split, echo = FALSE, fig.width = 12, fig.height = 6>>=
+
+part_plot + geom_vline(x = 10572.5, size = 2)
+
+# Create RSS calculations #2
+
+part_1 <- filter(College, Outstate < 10572.5) %>%
+  summarise(sum((Grad.Rate - mean(Grad.Rate))^2)/1000)
+
+part_2 <- filter(College, Outstate >= 10572.5) %>%
+  summarise(sum((Grad.Rate - mean(Grad.Rate))^2)/1000)
+
+@
+
+\vspace{2ex}
+
+\centering
+$\Sexpr{round(total_RSS/1000)} \stackrel{?}{<} \Sexpr{round(part_1)} + \Sexpr{round(part_2)} = \Sexpr{round(part_1 + part_2)}$
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{An Introduction to Decision Trees}
+
+\begin{multicols}{2}
+
+\begin{center}
+
+<<grad_rate_rpart_splits, echo = FALSE, fig.width = 10, fig.height = 10>>=
+
+part_plot + 
+  geom_vline(x = 10572.5, size = 2) +
+  geom_vline(x = 8558, size = 2) +
+  geom_vline(x = 16791, size = 2) +
+  geom_segment(aes(x = 2500, y = 30.5, xend = 8558, yend = 30.5), size = 2) + 
+  geom_segment(aes(x = 10572.5, y = 17.5, xend = 16791, yend = 17.5), size = 2) + 
+  geom_segment(aes(x = 16791, y = 70.5, xend = 21500, yend = 70.5), size = 2)
+
+@
+
+\end{center}
+
+\columnbreak
+
+\begin{center}
+
+<<grad_rate_rpart_tree, echo = FALSE, fig.width = 10, fig.height = 10>>=
+
+ex_cart <- rpart(Grad.Rate ~ Outstate + Top10perc, data = College[, c("Grad.Rate", "Outstate", "Top10perc")])
+plot(as.party(ex_cart))
+
+@
+
+\end{center}
+
+\end{multicols}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Detour: The Bias-Variance Tradeoff}
+\framesubtitle{training, testing, and cross-validation}
+
+\begin{center}
+\includegraphics[width = 3.5in]{figure/bias_variance_tradeoff.png}
+\end{center}
+\scriptsize Source: \textit{An Introduction to Statistical Learning}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Detour: The Bias-Variance Tradeoff}
+\framesubtitle{training, testing, and cross-validation}
+
+\begin{center}
+\includegraphics[width = 3.5in]{figure/k-fold-cross-validation.jpg}
+\end{center}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Decision Tree Pseudocode}
+
+\textbf{CART: Breiman et al. (1984)}
+
+\begin{enumerate}
+\item Search all variables for splits in a greedy, top-down manner
+\pause
+\item Identify the best split by some criterion
+\pause
+\item Split the sample on this threshold, resulting in two child nodes
+\pause
+\item Repeat steps 1-3 on the resulting nodes until some stopping criterion is reached
+\pause
+\item Prune tree using cross-validation
+\end{enumerate}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Handling Missingness - Decision Trees}
+\framesubtitle{surrogate splits}
+
+\begin{center}
+\includegraphics[width = 2.5in]{figure/surrogate_split.png}
+\end{center}
+\scriptsize Source: \textit{Hapfelmeier (2012)}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Recap: Pros and Cons of Decision Trees}
+
+\textbf{Pros:}
+\begin{itemize}
+\item intuitive, easy to explain and visualize
+\item can handle continuous or categorical outcomes
+\item non-parametric, robust to outliers
+\item no model specification required
+\end{itemize}
+
+\vspace{3ex}
+
+\pause
+
+\textbf{Cons:}
+\begin{itemize}
+\item biased toward variables with many possible splits
+\item typically outperformed by regression techniques
+\item prone to overfitting
+\end{itemize}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Random Forest Pseudocode}
+
+\textbf{CART forests: Breiman (2001)}
+
+\begin{enumerate}
+\item Take a bootstrap sample
+\pause
+\item Select a random subset of predictors
+\pause
+\item Fit a decision tree to full depth
+\pause
+\item Repeat 500ish times
+\end{enumerate}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Creating Ensembles of Trees}
+
+<<many_trees, include = FALSE>>=
+
+# bootstrap and sample 4 trees
+
+for(i in 1:4){
+  
+  boot_data <- College[sample(x = 1:nrow(College), size = nrow(College), replace = TRUE),
+                       c("Grad.Rate", "Outstate", "Top10perc")]
+  
+  the_tree <- as.party(rpart(Grad.Rate ~ ., data = boot_data))
+  
+  paste0("figure/boot_tree_", i, ".pdf")
+  
+  pdf(paste0("figure/boot_tree_", i, ".pdf"), width = 10, height = 10)
+  plot(the_tree, type= "simple",           
+  inner_panel = node_inner(the_tree,
+       abbreviate = TRUE,            
+       pval = FALSE,                
+       id = FALSE),                 
+  terminal_panel = node_terminal(the_tree, 
+       abbreviate = TRUE,
+       digits = 0,                   
+       fill = c("white"),            
+       id = FALSE)
+  )
+  dev.off()
+ 
+}
+
+@
+
+\begin{multicols}{2}
+
+\begin{center}
+
+\includegraphics[width = 1.3in]{figure/boot_tree_1.pdf} \\
+\includegraphics[width = 1.3in]{figure/boot_tree_2.pdf}
+
+\end{center}
+
+\columnbreak
+
+\begin{center}
+
+\includegraphics[width = 1.3in]{figure/boot_tree_3.pdf} \\
+\includegraphics[width = 1.3in]{figure/boot_tree_4.pdf}
+
+\end{center}
+
+\end{multicols}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Creating Ensembles of Trees}
+\framesubtitle{why it works - theoretical}
+
+\begin{center}
+\includegraphics[width = 2.5in]{figure/bias_var_target.png}
+\end{center}
+\scriptsize Source: \textit{Scott Fortmann-Roe}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Creating Ensembles of Trees}
+\framesubtitle{why it works - applied}
+
+\begin{center}
+\includegraphics[width = 3.5in]{figure/cart_sin_curve.png}
+\end{center}
+\scriptsize Source: \textit{Zachary Jones}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Creating Ensembles of Trees}
+\framesubtitle{why it works - applied}
+
+\begin{center}
+\includegraphics[width = 3.5in]{figure/forest_sin_curve.png}
+\end{center}
+\scriptsize Source: \textit{Zachary Jones}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Handling Missingness - Forests}
+\framesubtitle{imputation by proximity}
+
+For missing data:
+
+\begin{enumerate}
+\item Calculate proximity matrix (number of times observations show up in the same node)
+\item Impute missing values using medians and levels of the highest frequency
+\item Run a random forest model
+\item Update missing values to a weighted mean of the observations or category with the largest average proximity
+\item Repeat 5-10 times
+\end{enumerate}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Recap: Pros and Cons of Decision Trees}
+
+\textbf{Pros:}
+\begin{itemize}
+\item All the CART pros!
+\item Can now approximate smooth, nonlinear relationships instead of piecewise constant fits
+\item Unlikely to overfit
+\item Not much tuning required compared to other algorithmic methods
+\end{itemize}
+
+\vspace{3ex}
+
+\pause
+
+\textbf{Cons:}
+\begin{itemize}
+\item still biased toward variables with many possible splits
+\item Harder to interpret
+\item Longer computation time (still manageable for large datasets)
+\end{itemize}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Interpreting the Black Box}
+
+\begin{enumerate}
+\item Variable Importance
+\item Partial Dependence Plots
+\end{enumerate}
+
+\pause
+
+\vspace{3ex}
+
+more on this in a sec...
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Not a ``Magic'' Solution}
+
+\begin{multicols}{2}
+
+\begin{center}
+\includegraphics[height = 2.2in]{figure/magic_wand.jpg}
+\end{center}
+
+\columnbreak
+
+\pause
+
+\vspace{3ex}
+
+Random forests make no general assumptions regarding independence, and thus have the potential to be used for multilevel EDA with \textbf{little added complexity}
+
+\pause
+
+\vspace{3ex}
+
+However, not much is known about what happens when forests are used in this way
+
+\end{multicols}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Multilevel Extensions}
+\begin{frame}
+\frametitle{Proof of Concept}
+
+<<longData, echo = FALSE, fig.width = 10, fig.height = 7>>=
+
+# Simulate group A trajectory (ICC turns out to be about 50%)
+
+n_part_a <- 50
+n_time_a <- 5
+
+int_slope_a <- mvrnorm(n_part_a, mu = c(10, 4),
+                       Sigma = matrix(c(4, 1, 1, 4), nrow = 2))
+
+sim_a <- expand.grid(ID = 1:n_part_a, Time = 0:(n_time_a - 1))
+sim_a <- sim_a[order(sim_a$ID, sim_a$Time), ]
+
+score <- c(NA)
+
+for(i in 1:nrow(sim_a)){
+  
+  df <- sim_a[i,]
+  score[i] <- int_slope_a[df$ID, 1] + df$Time * int_slope_a[df$ID, 2] + rnorm(n = 1, mean = 0, sd = 3)
+  
+}
+
+sim_a$Score <- score
+
+sim_a$SES <- "High SES: (10, 4)"
+
+# Simulate group B
+
+n_part_b <- 50
+n_time_b <- 5
+
+int_slope_b <- mvrnorm(n_part_a, mu = c(8, 0.5),
+                       Sigma = matrix(c(4, 1, 1, 4), nrow = 2))
+
+sim_b <- expand.grid(ID = 1:n_part_b, Time = 0:(n_time_b - 1))
+sim_b <- sim_b[order(sim_b$ID, sim_b$Time), ]
+
+score <- c(NA)
+
+for(i in 1:nrow(sim_b)){
+  
+  df <- sim_b[i,]
+  score[i] <- int_slope_b[df$ID, 1] + df$Time * int_slope_b[df$ID, 2] + rnorm(n = 1, mean = 0, sd = 3)
+  
+}
+
+sim_b$Score <- score
+sim_b$SES <- "Low SES: (8, 0.5)"
+
+my_data <- rbind(sim_a, sim_b)
+my_data$ID <- rep(1:(n_part_a + n_part_b), each = n_time_a)
+
+# Create meaningless covariates at person-level
+# 3 numeric - standard normal distributions
+# 1 categorical - 2 levels
+# 1 categorical - 3 levels
+# 1 categorical - 4 levels
+# 1 ordinal - 7 levels
+
+null_cov <- data.frame(ID = 1:100,
+                       V1 = rnorm(n = 100),
+                       V2 = rnorm(n = 100),
+                       V3 = rnorm(n = 100),
+                       V4 = sample(1:2, size = 100, replace = TRUE),
+                       V5 = sample(1:3, size = 100, replace = TRUE),
+                       V6 = sample(1:4, size = 100, replace = TRUE),
+                       V7 = sample(1:7, size = 100, replace = TRUE, prob = c(5, 10, 20, 30, 20, 10, 5)),
+                       V8 = sample(1:5, size = 100, replace = TRUE, prob = c(15, 20, 30, 20, 15)))
+
+total_data <- merge(my_data, null_cov)
+
+# Ensure variable type is correct
+
+total_data$Time <- rep(c("T1", "T2", "T3", "T4", "T5"))
+total_data$Time <- ordered(total_data$Time)
+total_data$SES <- factor(total_data$SES)
+total_data$V4 <- factor(total_data$V4)
+total_data$V5 <- factor(total_data$V5)
+total_data$V6 <- factor(total_data$V6)
+total_data$V7 <- ordered(total_data$V7)
+total_data$V8 <- ordered(total_data$V8)
+
+p_total <- ggplot(aes(x = Time, y = Score), data = total_data) +
+  geom_line(aes(group = ID), color = "gray", size = 0.5) +
+  geom_smooth(aes(group = 1), method = "lm", size = 4, color = "black", se = FALSE) +
+  theme_bw() + labs(x = "\nTime", y = "Score\n") + 
+  theme(axis.title = element_text(size = 24),
+        axis.text = element_text(size = 20))
+
+p_total
+
+@
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Proof of Concept}
+
+<<longDataSub, echo = FALSE, fig.width = 18, fig.height = 10>>=
+
+p_sub <- ggplot(aes(x = Time, y = Score), data = total_data) +
+  geom_line(aes(group = ID), color = "gray") + facet_grid(. ~ SES) +
+  geom_smooth(aes(group = 1), method = "lm", size = 3, color = "black", se = FALSE) +
+  theme_bw() + labs(x = "\nTime", y = "Score\n") +
+  theme(axis.title = element_text(size = 36),
+        axis.text = element_text(size = 32),
+        strip.text = element_text(size = 32))
+
+p_sub
+
+@
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Proof of Concept}
+
+<<longDataResults, echo = FALSE, fig.width = 18, fig.height = 10, cache = TRUE>>=
+
+# Run random forest model
+
+rf_mod <- randomForest(Score ~ ., data = total_data[, -1])
+
+# Plot variable importance 
+
+var_imp <- data.frame(Variable = row.names(rf_mod$importance),
+                      rf_mod$importance)
+var_imp <- arrange(var_imp, desc(IncNodePurity))
+var_imp$Variable <- factor(var_imp$Variable, levels = rev(var_imp$Variable))
+
+var_imp_plot <- ggplot(aes(x = IncNodePurity, y = Variable), data = var_imp) + geom_point(size = 4) + theme_bw() + 
+  theme(text = element_text(size = 20)) + labs(x = "\nIncrease in Node Purity", y = "Variable\n") + 
+  ggtitle("Variable Importance\n") + 
+  scale_x_continuous(breaks = seq(0, 8000, 2000)) +
+  theme(axis.title = element_text(size = 36),
+        axis.text = element_text(size = 32),
+        plot.title = element_text(size = 32, face = "bold"))
+
+# Plot partial dependence: Time x binary interaction
+
+time_vals <- unique(total_data$Time)
+SES_vals <- unique(total_data$SES)
+
+# Create a grid
+two_vals <- expand.grid(time_vals, SES_vals)
+two_vals <- arrange(two_vals, Var1, Var2)
+
+two_rep <- total_data[rep(1:nrow(total_data), nrow(total_data)), ]
+
+two_rep$Time <- rep(two_vals$Var1, each = nrow(total_data))
+two_rep$Binary <- rep(two_vals$Var2, each = nrow(total_data))
+
+two_pred <- predict(rf_mod, two_rep)
+two_rep$pred <- two_pred
+
+two_agg <- group_by(two_rep, Time, SES) %>%
+  summarise(mean_pred = mean(pred))
+
+part_plot <- ggplot(aes(x = Time, y = mean_pred, group = SES), data = two_agg) + geom_line(size = 3) +
+  theme_bw() + labs(x = "\nTime", y = "Mean Prediction\n") +
+  scale_y_continuous(limits = c(-10, 50), breaks = seq(-10, 50, 10)) +
+  annotate("text", label = "High SES", x = 1.8, y = 22, size = 8, fontface = "bold") +
+  annotate("text", label = "Low SES", x = 4, y = 5, size = 8, fontface = "bold") +
+  ggtitle("Partial Dependence\n") + 
+  theme(axis.title = element_text(size = 36),
+        axis.text = element_text(size = 32),
+        plot.title = element_text(size = 32, face = "bold"))
+
+grid.arrange(var_imp_plot, rectGrob(gp = gpar(col = "white")), part_plot, widths = c(0.48, 0.04, 0.48), nrow = 1)
+
+@
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Multilevel Issues}
+\begin{frame}
+\frametitle{Issue 1: CART biased variable selection}
+\framesubtitle{single level (N = 1000)}
+
+<<bias_importance_lev1, echo = FALSE, fig.height = 10, fig.width = 16, cache = TRUE>>=
+
+null_cov <- data.frame(Score = rnorm(n = 1000),
+                       V1 = rnorm(n = 1000),
+                       V2 = factor(sample(1:2, size = 1000, replace = TRUE)),
+                       V3 = factor(sample(1:3, size = 1000, replace = TRUE)),
+                       V4 = factor(sample(1:10, size = 1000, replace = TRUE)),
+                       V5 = ordered(sample(1:5, size = 1000, replace = TRUE, prob = c(15, 20, 30, 20, 15))),
+                       V6 = ordered(sample(1:7, size = 1000, replace = TRUE, prob = c(5, 10, 20, 30, 20, 10, 5))))
+
+null_rf <- randomForest(Score ~ ., data = null_cov)
+
+imp <- data.frame(Variable = row.names(null_rf$importance),
+                      null_rf$importance)
+imp$Variable <- c("Continuous", "Categorical\n(k = 2)",
+                      "Categorical\n(k = 3)", "Categorical\n(k = 10)",
+                      "Ordinal\n(k = 5)", "Ordinal\n(k = 7)")
+imp <- arrange(imp, desc(IncNodePurity))
+imp$Variable <- factor(imp$Variable, levels = rev(imp$Variable))
+
+imp_plot <- ggplot(aes(x = IncNodePurity, y = Variable), data = imp) + geom_point(size = 6) + theme_bw() + 
+  theme(text = element_text(size = 20)) + labs(x = "\nIncrease in Node Purity", y = "Variable\n") + 
+  ggtitle("Variable Importance\n") + 
+  scale_x_continuous(breaks = seq(0, 300, 50)) +
+  theme(axis.title = element_text(size = 26),
+        axis.text = element_text(size = 22),
+        plot.title = element_text(size = 26, face = "bold"))
+
+imp_plot 
+
+@
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Issue 1: CART biased variable selection}
+\framesubtitle{multilevel (N = 1000, L2/L1 = 100/10)}
+
+<<bias_importance_lev2, echo = FALSE, fig.height = 10, fig.width = 16, cache = TRUE>>=
+
+null_data <- data.frame(ID = rep(1:100, each = 10),
+                        Score = rnorm(n = 1000),
+                        V1 = rnorm(n = 1000),
+                        V2 = factor(sample(1:2, size = 1000, replace = TRUE)),
+                        V3 = ordered(sample(1:5, size = 1000, replace = TRUE, prob = c(15, 20, 30, 20, 15))))
+
+null_cov_lev2 <- data.frame(ID = 1:100,
+                            V4 = rnorm(n = 100),
+                            V5 = factor(sample(1:2, size = 100, replace = TRUE)),
+                            V6 = ordered(sample(1:5, size = 100, replace = TRUE, prob = c(15, 20, 30, 20, 15))))
+
+null_data_total <- merge(null_data, null_cov_lev2, by = "ID")
+
+null_rf_lev2 <- randomForest(Score ~ ., data = null_data_total[, -1])
+
+imp_lev2 <- data.frame(Variable = row.names(null_rf_lev2$importance),
+                           null_rf_lev2$importance)
+imp_lev2$Variable <- c("L1 Continuous", "L1 Categorical\n(k = 2)",
+                       "L1 Ordinal\n(k = 5)", "L2 Continuous",
+                       "L2 Categorical\n(k = 2)", "L2 Ordinal\n(k = 5)")
+imp_lev2 <- arrange(imp_lev2, desc(IncNodePurity))
+imp_lev2$Variable <- factor(imp_lev2$Variable, levels = rev(imp_lev2$Variable))
+
+imp_plot_lev2 <- ggplot(aes(x = IncNodePurity, y = Variable), data = imp_lev2) + geom_point(size = 6) + theme_bw() + 
+  theme(text = element_text(size = 20)) + labs(x = "\nIncrease in Node Purity", y = "Variable\n") + 
+  ggtitle("Variable Importance\n") + 
+  scale_x_continuous(breaks = seq(0, 300, 50)) +
+  theme(axis.title = element_text(size = 26),
+        axis.text = element_text(size = 22),
+        plot.title = element_text(size = 26, face = "bold"))
+
+imp_plot_lev2
+
+@
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Issue 2: Underestimation of OOB error}
+
+\begin{multicols}{2}
+
+\begin{center}
+\includegraphics[width = 2in]{figure/oob.jpg}
+\end{center}
+
+\columnbreak
+
+\begin{center}
+
+$P_{notselected} = (1 - \frac{1}{n})^n$
+
+\vspace{3ex}
+
+$\lim_{n\to\infty} P = \frac{1}{e} \approx 0.368$
+
+\end{center}
+
+\end{multicols}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Issue 2: Underestimation of OOB error}
+
+<<oob_underestimate, echo = FALSE>>=
+
+rf_test <- c(NA)
+rf_oob <- c(NA)
+
+total_data <- create_fold(total_data, "ID", 5)
+
+for(i in 1:5){
+  
+  train <- dplyr::filter(total_data, fold != i)
+  test <- dplyr::filter(total_data, fold == i)
+  
+  rf_mod <- randomForest(Score ~ SES + Time + V1 + V2 + V3 + V4 + V5 + V6 + V7 + V8, data = train)
+  
+  rf_test[i] <- mean((predict(object = rf_mod, newdata = test) - test$Score)^2)
+  rf_oob[i] <- mean(rf_mod$mse)
+  
+}
+
+@
+
+\begin{multicols}{2}
+
+\begin{center}
+\includegraphics[width = 2in]{figure/oob.jpg}
+\end{center}
+
+\columnbreak
+
+\begin{center}
+
+$MSE_{test}$ = $\Sexpr{round(mean(rf_test), 2)}$ 
+
+\vspace{3ex}
+
+$MSE_{OOB}$ = $\Sexpr{round(mean(rf_oob), 2)}$
+
+\end{center}
+
+\end{multicols}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Reminder: Issues to Keep in Mind}
+
+\begin{itemize}
+\item OOB errer estimates will be unreliable
+\item Additional bias for level-2 variables occurs
+\item DO NOT use this method and then perform confirmatory tests on the same data
+\end{itemize}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Analysis Steps}
+
+\begin{enumerate}
+\item Initial pre-processing (``feature engineering'', handle missingness)
+\item Estimate ICC and consider what level the variables were measured at
+\item Estimate predictive performance using a hold out test set or cross-validation (at level-2)
+\item Examine variable importance and partial dependence plots
+\end{enumerate}
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}
+\frametitle{Helpful (and Accessible) Citations}
+
+Breiman, L. (2001). Statistical modeling: The two cultures \\
+
+Shmueli, G. (2010). To explain or predict? \\
+
+Strobl, C. et al. (2009). An introduction to recursive partitioning: rationale, application, and characteristics of classification and regression trees, bagging, and random forests
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\end{document}

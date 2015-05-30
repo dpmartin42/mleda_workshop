@@ -1,0 +1,11 @@
+base
+knitr
+ISLR
+ggplot2
+rpart
+randomForest
+partykit
+dplyr
+gridExtra
+car
+MASS
