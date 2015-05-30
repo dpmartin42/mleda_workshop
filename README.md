@@ -1,1 +1,3 @@
 # mleda_workshop
+
+Workshop materials include slides introducing recursive partitioning methods and how they might be applied to multilevel data. In addition, two R scripts are also included. One provides an introduction to decision trees and random forests for a variety of single-level datasets, while the other applies random forests to a two-level dataset on student math achievement, with students nested within schools.
